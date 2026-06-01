@@ -18,6 +18,9 @@ TensorFlow.js:
     $ npm install
     $ ln -s ../../yolov5/yolov5s_web_model public/yolov5s_web_model
     $ npm start
+
+python export.py --weights=./weights/yolo.pt  --encrypt    --dynamic --include=onnx --opset=11 --imgsz 768 1024
+
 """
 
 import argparse
@@ -78,7 +81,10 @@ def export_onnx(model, im, file, opset, train, dynamic, simplify, prefix=colorst
                           dynamic_axes={'images': {0: 'batch', 2: 'height', 3: 'width'},  # shape(1,3,640,640)
                                         'output': {0: 'batch', 1: 'anchors'}  # shape(1,25200,85)
                                         } if dynamic else None)
-
+                        # dynamic_axes={'images': {0: 'batch'},  # shape(1,3,640,640)
+                        #               'output': {0: 'batch'}  # shape(1,25200,85)
+                        #               } if dynamic else None)
+	
         # Checks
         model_onnx = onnx.load(f)  # load onnx model
         onnx.checker.check_model(model_onnx)  # check onnx model
@@ -263,7 +269,8 @@ def run(data=ROOT / 'data/coco128.yaml',  # 'dataset.yaml path'
         topk_per_class=100,  # TF.js NMS: topk per class to keep
         topk_all=100,  # TF.js NMS: topk for all classes to keep
         iou_thres=0.45,  # TF.js NMS: IoU threshold
-        conf_thres=0.25  # TF.js NMS: confidence threshold
+        conf_thres=0.25,  # TF.js NMS: confidence threshold
+        encrypt=True,
         ):
     t = time.time()
     include = [x.lower() for x in include]
@@ -304,6 +311,13 @@ def run(data=ROOT / 'data/coco128.yaml',  # 'dataset.yaml path'
         export_torchscript(model, im, file, optimize)
     if 'onnx' in include:
         export_onnx(model, im, file, opset, train, dynamic, simplify)
+        output_file = os.path.join(str(file.parts[0]), ("encrypt_" + str(file.parts[1])).replace(".pt", ".onnx"))
+        input_file = str(file).replace(".pt", ".onnx")
+
+        if encrypt:
+            print("encrypt onnx..............")
+            encoderOnnx(input_file, output_file)
+            os.remove(input_file)
     if 'coreml' in include:
         export_coreml(model, im, file)
 
@@ -349,10 +363,33 @@ def parse_opt():
     parser.add_argument('--include', nargs='+',
                         default=['torchscript', 'onnx'],
                         help='available formats are (torchscript, onnx, coreml, saved_model, pb, tflite, tfjs)')
+
+    parser.add_argument('--encrypt', action='store_true', help='ONNX: encrypt model')
     opt = parser.parse_args()
     print_args(FILE.stem, opt)
     return opt
 
+def encoderOnnx(input_file, output_file):
+    key = "zhuhaikeyutech"
+    with open(input_file, 'rb') as file_in, open(output_file, 'wb') as file_out:
+        key_length = len(key)
+        key_index = 0
+
+        for _ in range(20):  # 仅加密文件的前20个字符
+            byte = file_in.read(1)
+            if not byte:
+                break
+
+            # Perform XOR encryption with the key
+            encrypted_byte = ord(byte) ^ ord(key[key_index])
+            file_out.write(bytes([encrypted_byte]))
+
+            # Move to the next character in the key, wrapping around if needed
+            key_index = (key_index + 1) % key_length
+
+        # Copy the remaining part of the file without encryption
+        shutil.copyfileobj(file_in, file_out)
+    print("encrypt done!\n")
 
 def main(opt):
     set_logging()

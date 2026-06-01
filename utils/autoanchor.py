@@ -14,6 +14,7 @@ from utils.general import colorstr
 
 
 def check_anchor_order(m):
+    # 检查anchor与数据的匹配度，必要时重新计算
     # Check anchor order against stride order for YOLOv5 Detect() module m, and correct if necessary
     a = m.anchors.prod(-1).view(-1)  # anchor area
     da = a[-1] - a[0]  # delta a
@@ -24,7 +25,7 @@ def check_anchor_order(m):
 
 
 def check_anchors(dataset, model, thr=4.0, imgsz=640):
-    # Check anchor fit to data, recompute if necessary
+    # Check anchor fit to data, recompute if necessary  确保anchor按面积大小排序与stride顺序一致
     prefix = colorstr('autoanchor: ')
     print(f'\n{prefix}Analyzing anchors... ', end='')
     m = model.module.model[-1] if hasattr(model, 'module') else model.model[-1]  # Detect()
@@ -78,6 +79,7 @@ def kmean_anchors(dataset='./data/coco128.yaml', n=9, img_size=640, thr=4.0, gen
         Usage:
             from utils.autoanchor import *; _ = kmean_anchors()
     """
+    # 使用k-means算法从训练数据生成最优anchor
     from scipy.cluster.vq import kmeans
 
     thr = 1. / thr

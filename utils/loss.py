@@ -15,19 +15,20 @@ def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#iss
     return 1.0 - 0.5 * eps, 0.5 * eps
 
 
-class BCEBlurWithLogitsLoss(nn.Module):
-    # BCEwithLogitLoss() with reduced missing label effects.
+class BCEBlurWithLogitsLoss(nn.Module): # 类继承自 nn.Module 父类
+    # BCEwithLogitLoss() with reduced missing label effects. 减少了标签缺失的影响。
     def __init__(self, alpha=0.05):
-        super(BCEBlurWithLogitsLoss, self).__init__()
-        self.loss_fcn = nn.BCEWithLogitsLoss(reduction='none')  # must be nn.BCEWithLogitsLoss()
+        super(BCEBlurWithLogitsLoss, self).__init__() # super(子类名，self).父类方法()
+        # 实例属性 (Instance Attribute)  链式调用
+        self.loss_fcn = nn.BCEWithLogitsLoss(reduction='none')  # must be nn.BCEWithLogitsLoss() （不缩减，保留每个元素的损失）
         self.alpha = alpha
 
-    def forward(self, pred, true):
+    def forward(self, pred, true): # forward 是 PyTorch 模块的核心方法 调用时可以直接 module(input)，会自动调用 forward
         loss = self.loss_fcn(pred, true)
         pred = torch.sigmoid(pred)  # prob from logits
         dx = pred - true  # reduce only missing label effects
         # dx = (pred - true).abs()  # reduce missing label and false label effects
-        alpha_factor = 1 - torch.exp((dx - 1) / (self.alpha + 1e-4))
+        alpha_factor = 1 - torch.exp((dx - 1) / (self.alpha + 1e-4)) # 1e-4  # 等于 0.0001
         loss *= alpha_factor
         return loss.mean()
 
@@ -36,14 +37,14 @@ class FocalLoss(nn.Module):
     # Wraps focal loss around existing loss_fcn(), i.e. criteria = FocalLoss(nn.BCEWithLogitsLoss(), gamma=1.5)
     def __init__(self, loss_fcn, gamma=1.5, alpha=0.25):
         super(FocalLoss, self).__init__()
-        self.loss_fcn = loss_fcn  # must be nn.BCEWithLogitsLoss()
-        self.gamma = gamma
-        self.alpha = alpha
+        self.loss_fcn = loss_fcn  # must be nn.BCEWithLogitsLoss() 必须是 nn.BCEWithLogitsLoss()
+        self.gamma = gamma # 聚焦参数
+        self.alpha = alpha # 平衡因子
         self.reduction = loss_fcn.reduction
         self.loss_fcn.reduction = 'none'  # required to apply FL to each element
 
     def forward(self, pred, true):
-        loss = self.loss_fcn(pred, true)
+        loss = self.loss_fcn(pred, true) # 先计算原始 BCE 损失
         # p_t = torch.exp(-loss)
         # loss *= self.alpha * (1.000001 - p_t) ** self.gamma  # non-zero power for gradient stability
 
@@ -90,8 +91,9 @@ class QFocalLoss(nn.Module):
 
 class ComputeLoss:
     # Compute losses
-    def __init__(self, model, autobalance=False):
+    def __init__(self, model, level_dict, autobalance=False):
         self.sort_obj_iou = False
+        self.level_dict=level_dict
         device = next(model.parameters()).device  # get model device
         h = model.hyp  # hyperparameters
 
@@ -116,7 +118,7 @@ class ComputeLoss:
 
     def __call__(self, p, targets):  # predictions, targets, model
         device = targets.device
-        lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
+        lcls_main_show,lcls_sub_show,lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
         tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets
 
         # Losses
@@ -146,7 +148,26 @@ class ComputeLoss:
                 if self.nc > 1:  # cls loss (only if multiple classes)
                     t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets
                     t[range(n), tcls[i]] = self.cp
-                    lcls += self.BCEcls(ps[:, 5:], t)  # BCE
+                    # lcls += self.BCEcls(ps[:, 5:], t)  # BCE
+
+                    #sub_level
+                    temp_sub=(self.BCEcls(ps[:, 5:], t))
+                    lcls += self.hyp['lcls_sub']*temp_sub  # BCE
+                    lcls_sub_show+= self.hyp['lcls_sub']*temp_sub #观测
+
+                    # temp_lcls_main_list=[]
+                    # temp_t_main_list=[]
+                    # temp_ps=ps[:, 5:]
+                    # for k,v in self.level_dict.items():
+                    #     temp_lcls_main_list.append(torch.sum(temp_ps[:,v],dim=1).unsqueeze(1))
+                    #     temp_t_main_list.append(torch.sum(t[:,v],dim=1).unsqueeze(1))
+                    # lcls_main=torch.cat(temp_lcls_main_list,dim=1)
+                    # t_main=torch.cat(temp_t_main_list,dim=1)
+
+                    # # main_level
+                    # temp_main=(self.BCEcls(lcls_main,t_main))
+                    # lcls += self.hyp['lcls_main']  * temp_main
+                    # lcls_main_show +=self.hyp['lcls_main'] * temp_main#观测
 
                 # Append targets to text file
                 # with open('targets.txt', 'a') as file:
@@ -162,10 +183,12 @@ class ComputeLoss:
         lbox *= self.hyp['box']
         lobj *= self.hyp['obj']
         lcls *= self.hyp['cls']
+        lcls_main_show *= self.hyp['cls']
+        lcls_sub_show *= self.hyp['cls']
         bs = tobj.shape[0]  # batch size
 
-        return (lbox + lobj + lcls) * bs, torch.cat((lbox, lobj, lcls)).detach()
-
+        return (lbox + lobj + lcls) * bs, torch.cat((lbox, lobj, lcls,lcls_main_show,lcls_sub_show)).detach()
+    
     def build_targets(self, p, targets):
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
         na, nt = self.na, targets.shape[0]  # number of anchors, targets

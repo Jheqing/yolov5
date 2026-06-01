@@ -608,12 +608,21 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
                         labels=(), max_det=300):
     """Runs Non-Maximum Suppression (NMS) on inference results
 
+    Parameters:
+    prediction: 模型预测结果，形状为(batch_size, num_anchors, 85)
+    conf_thres: 置信度阈值（默认0.25）
+    iou_thres: IoU阈值（默认0.45）
+    classes: 类别过滤器
+    agnostic: 是否类别无关NMS
+    multi_label: 是否允许多标签
+    max_det: 最大检测数量（默认300）
+        
     Returns:
          list of detections, on (n,6) tensor per image [xyxy, conf, cls]
     """
 
-    nc = prediction.shape[2] - 5  # number of classes
-    xc = prediction[..., 4] > conf_thres  # candidates
+    nc = prediction.shape[2] - 5  # number of classes  类别数
+    xc = prediction[..., 4] > conf_thres  # candidates 筛选置信度高于阈值的候选框
 
     # Checks
     assert 0 <= conf_thres <= 1, f'Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0'
@@ -648,12 +657,12 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
             continue
 
         # Compute conf
-        x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
+        x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf 总置信度 = 目标置信度 × 分类置信度
 
-        # Box (center x, center y, width, height) to (x1, y1, x2, y2)
+        # Box (center x, center y, width, height) to (x1, y1, x2, y2) 中心点坐标转角点坐标
         box = xywh2xyxy(x[:, :4])
 
-        # Detections matrix nx6 (xyxy, conf, cls)
+        # Detections matrix nx6 (xyxy, conf, cls) 多标签模式：一个框可以有多个类别
         if multi_label:
             i, j = (x[:, 5:] > conf_thres).nonzero(as_tuple=False).T
             x = torch.cat((box[i], x[i, j + 5, None], j[:, None].float()), 1)
@@ -677,12 +686,12 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
             x = x[x[:, 4].argsort(descending=True)[:max_nms]]  # sort by confidence
 
         # Batched NMS
-        c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
+        c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes 类别偏移（实现类别感知NMS）
         boxes, scores = x[:, :4] + c, x[:, 4]  # boxes (offset by class), scores
-        i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
-        if i.shape[0] > max_det:  # limit detections
+        i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS 调用PyTorch官方NMS 使用PyTorch官方优化的NMS实现
+        if i.shape[0] > max_det:  # limit detections 后处理限制 限制最大检测数
             i = i[:max_det]
-        if merge and (1 < n < 3E3):  # Merge NMS (boxes merged using weighted mean)
+        if merge and (1 < n < 3E3):  # Merge NMS (boxes merged using weighted mean) 可选的Merge-NMS（加权合并重叠框）
             # update boxes as boxes(i,4) = weights(i,n) * boxes(n,4)
             iou = box_iou(boxes[i], boxes) > iou_thres  # iou matrix
             weights = iou * scores[None]  # box weights
@@ -709,6 +718,30 @@ def strip_optimizer(f='best.pt', s=''):  # from utils.general import *; strip_op
     x['model'].half()  # to FP16
     for p in x['model'].parameters():
         p.requires_grad = False
+    torch.save(x, s or f)
+    mb = os.path.getsize(s or f) / 1E6  # filesize
+    print(f"Optimizer stripped from {f},{(' saved as %s,' % s) if s else ''} {mb:.1f}MB")
+
+def strip_optimizer1(f='best.pt', s=''):
+    """用在train.py模型训练完后
+    将optimizer、training_results、updates...从保存的模型文件f中删除
+    Strip optimizer from 'f' to finalize training, optionally save as 's'
+    :params f: 传入的原始保存的模型文件
+    :params s: 删除optimizer等变量后的模型保存的地址 dir
+    """
+    # x: 为加载训练的模型
+    x = torch.load(f, map_location=torch.device('cpu'))
+    # 如果模型是ema replace model with ema
+    if x.get('ema'):
+        x['model'] = x['ema']
+    # 以下模型训练涉及到的若干个指定变量置空
+    for k in 'optimizer', 'training_results', 'wandb_id', 'ema', 'updates':  # keys
+        x[k] = None
+    x['epoch'] = -1  # 模型epoch恢复初始值-1
+    x['model'].half()  # to FP16
+    for p in x['model'].parameters():
+        p.requires_grad = False
+    # 保存模型 x -> s/f
     torch.save(x, s or f)
     mb = os.path.getsize(s or f) / 1E6  # filesize
     print(f"Optimizer stripped from {f},{(' saved as %s,' % s) if s else ''} {mb:.1f}MB")
