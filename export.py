@@ -370,7 +370,7 @@ def parse_opt():
     return opt
 
 def encoderOnnx(input_file, output_file):
-    key = "zhuhaikeyutech"
+    key = "zhu-hai-ke-yu-tech" # qudiao -
     with open(input_file, 'rb') as file_in, open(output_file, 'wb') as file_out:
         key_length = len(key)
         key_index = 0
